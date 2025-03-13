@@ -1,0 +1,123 @@
+name: Build, Push to ECR
+
+on:
+  workflow_call:
+    outputs:
+      docker-image:
+        description: "The ID of the created docker image"
+        value: ${{ jobs.build-container.outputs.docker-image }}
+permissions:
+      id-token: write   # This is required for requesting the JWT
+      contents: read    # This is required for actions/checkout
+env:
+  AWS_REGION: ap-southeast-2  # Change this to your AWS region
+  ECR_REPOSITORY: my-ecr-repo  # Change this to your ECR repository name
+  CRITICAL_THRESHOLD: 0
+  HIGH_THRESHOLD: 0
+  MEDIUM_THRESHOLD: 5
+  LOW_THRESHOLD: 5
+  OTHER_THRESHOLD: 5
+
+
+jobs:
+  build-container:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+    timeout-minutes: 60
+    steps:
+      # checkout the repository containing our Dockerfile
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      # Setup prerequisites for docker/build-push-action
+      - name: Set up docker build prereqs (QEMU)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up docker build prereqs (Buildx)
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.OICD_ROLE }}
+          role-session-name: gh-${{ github.repository_id}}-${{ github.sha }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Rolechain into deployment role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.DEPLOY_ROLE }}
+          role-session-name: gh-d-${{ github.repository_id}}-${{ github.sha }}
+          aws-region: ${{ env.AWS_REGION }}  
+          role-chaining: true      
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # build the image you wish to scan
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          load: true
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+
+      - name: Scan built image with Inspector
+        uses: aws-actions/vulnerability-scan-github-action-for-amazon-inspector@v1
+        id: inspector
+        with:
+          artifact_type: 'container'
+          artifact_path: '${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}'
+          critical_threshold: ${{ env.CRITICAL_THRESHOLD }}
+          high_threshold: ${{ env.HIGH_THRESHOLD }}
+          medium_threshold: ${{ env.MEDIUM_THRESHOLD }}
+          low_threshold: ${{ env.LOW_THRESHOLD }}
+          other_threshold: ${{ env.OTHER_THRESHOLD }}
+        
+      - name: Display Inspector vulnerability scan results (markdown)
+        run: cat ${{ steps.inspector.outputs.inspector_scan_results_markdown }}
+
+      - name: Upload Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: Uploading scan SBOM results
+          path: |
+            ${{ steps.inspector.outputs.inspector_scan_results }}
+            ${{ steps.inspector.outputs.inspector_scan_results_csv }}
+            ${{ steps.inspector.outputs.artifact_sbom }}
+
+      - name: Fail job if vulnerability threshold is exceeded
+        run: exit ${{ steps.inspector.outputs.vulnerability_threshold_exceeded }}
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          load: true
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache    
