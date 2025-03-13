@@ -23,6 +23,33 @@ The workflow performs the following steps:
 7. Fails the job if vulnerability thresholds are exceeded
 8. Pushes the image to ECR if it passes the security scan
 
+## Workflow Diagram
+
+```mermaid
+flowchart TD
+    A[Trigger: Push or workflow_call] --> B[Checkout Repository]
+    B --> C[Setup Docker Build Prerequisites]
+    C --> D[Configure AWS Credentials via OIDC]
+    D --> E[Role Chain into Deployment Role]
+    E --> F[Login to Amazon ECR]
+    F --> G[Build Docker Image]
+    G --> H[Scan Image with AWS Inspector]
+    H --> I{Vulnerability\nThresholds\nExceeded?}
+    I -->|Yes| J[Fail Build]
+    I -->|No| K[Push Image to ECR]
+    H --> L[Upload Scan Results as Artifacts]
+    
+    classDef success fill:#9f6,stroke:#333,stroke-width:2px;
+    classDef failure fill:#f66,stroke:#333,stroke-width:2px;
+    classDef process fill:#66b,stroke:#333,stroke-width:2px,color:#fff;
+    classDef condition fill:#fb0,stroke:#333,stroke-width:2px;
+    
+    class K success;
+    class J failure;
+    class B,C,D,E,F,G,H,L process;
+    class I condition;
+```
+
 ## Vulnerability Thresholds
 
 The workflow uses environment variables to define thresholds for different vulnerability severity levels:
@@ -198,4 +225,4 @@ If the workflow fails due to vulnerability thresholds:
 
 ## License
 
-[MIT License](LICENSE) 
+[MIT License](LICENSE)
