@@ -34,7 +34,7 @@ flowchart TD
     E --> F[Login to Amazon ECR]
     F --> G[Build Docker Image]
     G --> H[Scan Image with AWS Inspector]
-    H --> I{Vulnerability\nThresholds\nExceeded?}
+    H --> I{Vulnerability Thresholds Exceeded?}
     I -->|Yes| J[Fail Build]
     I -->|No| K[Push Image to ECR]
     H --> L[Upload Scan Results as Artifacts]
